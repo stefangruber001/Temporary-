@@ -168,6 +168,9 @@
   .lock-input:focus{border-color:var(--accent);background:#fff;}
   .lock-err{color:var(--red);font-size:13px;font-weight:600;min-height:18px;margin:10px 0 0;}
   .lock-go{width:100%;margin-top:8px;}
+  .lock-bio{width:100%;margin-top:10px;}
+  .lock-remember{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:14px;font-size:12.5px;color:var(--muted);cursor:pointer;}
+  .lock-remember input{width:16px;height:16px;accent-color:var(--accent);}
   .lock-reset{display:block;width:100%;margin-top:14px;background:none;border:none;color:var(--faint);font-size:12px;
     text-decoration:underline;cursor:pointer;font-family:var(--sans);}
 </style>
@@ -240,6 +243,8 @@
     <input class="lock-input" id="lockInput" type="password" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="64" aria-label="Passcode">
     <p class="lock-err" id="lockErr"></p>
     <button class="btn primary lock-go" id="lockGo">Unlock</button>
+    <button class="btn ghost lock-bio" id="lockBio" style="display:none">Use Face ID</button>
+    <label class="lock-remember" id="lockRememberRow"><input type="checkbox" id="lockRemember" checked> Keep me unlocked on this device</label>
     <button class="lock-reset" id="lockReset">Reset (erases this device&rsquo;s data)</button>
   </div>
 </div>
@@ -249,7 +254,7 @@
   "use strict";
   var store=(function(){try{var k="__t";localStorage.setItem(k,"1");localStorage.removeItem(k);return localStorage;}
     catch(e){var m={};return{getItem:function(k){return k in m?m[k]:null;},setItem:function(k,v){m[k]=String(v);},removeItem:function(k){delete m[k];}};}})();
-  var KEY="ef_portfolio_v1", SET="ef_settings_v1", PIN="ef_pin_v1";
+  var KEY="ef_portfolio_v1", SET="ef_settings_v1", PIN="ef_pin_v1", REMEMBER="ef_remember_v1", BIO="ef_bio_v1";
 
   // Single pre-loaded holding: VWCE, €25,000 invested at today's rate (break-even at open).
   // P0 is only a placeholder shown before the first live refresh; on the first successful
@@ -555,52 +560,117 @@
     }catch(e){ return Promise.reject(e); }
   }
 
+  // Face ID / Touch ID via WebAuthn (optional, per device). The biometric check is local —
+  // a successful prompt unlocks the UI. Like the passcode, this is convenience / light privacy,
+  // not encryption of the (public) page.
+  function bioSupported(){return !!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create);}
+  function bioGet(){try{return JSON.parse(store.getItem(BIO)||"null");}catch(e){return null;}}
+  function rand(n){var a=new Uint8Array(n);if(window.crypto&&crypto.getRandomValues)crypto.getRandomValues(a);return a;}
+  function b64u(buf){var b=new Uint8Array(buf),s="";for(var i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");}
+  function unb64u(s){s=s.replace(/-/g,"+").replace(/_/g,"/");while(s.length%4)s+="=";var bin=atob(s),b=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)b[i]=bin.charCodeAt(i);return b.buffer;}
+  function bioRegister(){
+    return navigator.credentials.create({publicKey:{
+      challenge:rand(32),
+      rp:{name:"E&F Portfolio"},
+      user:{id:rand(16),name:"ef-portfolio",displayName:"E&F Portfolio"},
+      pubKeyCredParams:[{type:"public-key",alg:-7},{type:"public-key",alg:-257}],
+      authenticatorSelection:{authenticatorAttachment:"platform",userVerification:"required",residentKey:"preferred"},
+      timeout:60000, attestation:"none"
+    }}).then(function(cred){ store.setItem(BIO,JSON.stringify({id:b64u(cred.rawId)})); return true; });
+  }
+  function bioAuth(){
+    var rec=bioGet(); if(!rec) return Promise.reject(new Error("not registered"));
+    return navigator.credentials.get({publicKey:{
+      challenge:rand(32),
+      allowCredentials:[{type:"public-key",id:unb64u(rec.id)}],
+      userVerification:"required", timeout:60000
+    }}).then(function(){return true;});
+  }
+
   var lockEl=document.getElementById("lock"),
       lockInput=document.getElementById("lockInput"),
       lockTitle=document.getElementById("lockTitle"),
       lockHelp=document.getElementById("lockHelp"),
       lockErr=document.getElementById("lockErr"),
-      lockGo=document.getElementById("lockGo");
+      lockGo=document.getElementById("lockGo"),
+      lockBio=document.getElementById("lockBio"),
+      lockRemember=document.getElementById("lockRemember"),
+      lockRememberRow=document.getElementById("lockRememberRow");
 
-  function lockError(m){lockErr.textContent=m;lockInput.value="";lockInput.focus();}
+  function lockError(m){lockErr.style.color="var(--red)";lockErr.textContent=m;lockInput.value="";lockInput.focus();}
+  function lockHint(m){lockErr.style.color="var(--muted)";lockErr.textContent=m;}
 
-  function showLock(){
-    lockEl.classList.add("show");
-    lockTitle.textContent="Enter passcode";
-    lockHelp.textContent="Enter the passcode to open E&F Portfolio.";
-    lockGo.textContent="Unlock";
-    lockErr.textContent=""; lockInput.value="";
-    setTimeout(function(){lockInput.focus();},60);
-  }
   function doUnlock(){
     unlocked=true;
     lockEl.classList.remove("show");
     document.getElementById("app").style.display="";
     boot();
   }
-  function lockSubmit(){
+
+  function verifyPass(){
     var v=lockInput.value;
-    if(!v) return lockError("Enter your passcode.");
-    lockGo.disabled=true;
-    sha256Hex(v).then(function(h){
-      lockGo.disabled=false;
-      if(h===PRESET_SHA256) doUnlock(); else lockError("Incorrect passcode.");
-    }).catch(function(){
-      lockGo.disabled=false;
-      lockError("This device can’t verify the passcode (needs HTTPS).");
+    if(!v) return Promise.reject("empty");
+    return sha256Hex(v).then(function(h){return h===PRESET_SHA256;});
+  }
+  function passUnlock(){
+    verifyPass().then(function(ok){
+      if(!ok) return lockError("Incorrect passcode.");
+      if(lockRemember && lockRemember.checked){try{store.setItem(REMEMBER,"1");}catch(e){}}
+      doUnlock();
+    }).catch(function(e){
+      lockError(e==="empty"?"Enter your passcode.":"This device can’t verify the passcode (needs HTTPS).");
     });
   }
-  lockGo.addEventListener("click",lockSubmit);
-  lockInput.addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();lockSubmit();}});
+  function setupBio(){
+    verifyPass().then(function(ok){
+      if(!ok) return lockError("Enter your passcode first, then tap Set up Face ID.");
+      lockBio.disabled=true; lockErr.textContent="";
+      bioRegister().then(function(){ lockBio.disabled=false; doUnlock(); })
+        .catch(function(){ lockBio.disabled=false; lockError("Couldn’t set up Face ID — you can still use your passcode."); });
+    }).catch(function(e){
+      lockError(e==="empty"?"Enter your passcode first, then tap Set up Face ID.":"This device can’t verify the passcode.");
+    });
+  }
+  function useBio(){
+    lockBio.disabled=true; lockErr.textContent="";
+    bioAuth().then(function(){ lockBio.disabled=false; doUnlock(); })
+      .catch(function(){ lockBio.disabled=false; lockHint("Face ID didn’t complete — enter your passcode, or tap Use Face ID to try again."); });
+  }
+
+  function showLock(){
+    lockEl.classList.add("show");
+    lockErr.textContent=""; lockInput.value="";
+    lockTitle.textContent="Unlock"; lockGo.textContent="Unlock";
+    if(bioGet()){
+      lockHelp.textContent="Unlock with Face ID, or enter your passcode.";
+      lockBio.textContent="Use Face ID"; lockBio.style.display="block"; lockBio.onclick=useBio;
+      lockRememberRow.style.display="none";
+    }else{
+      lockHelp.textContent="Enter the passcode to open E&F Portfolio.";
+      if(bioSupported()){ lockBio.textContent="Set up Face ID"; lockBio.style.display="block"; lockBio.onclick=setupBio; }
+      else { lockBio.style.display="none"; }
+      lockRememberRow.style.display="flex";
+    }
+    setTimeout(function(){lockInput.focus();},60);
+  }
+
+  function startLock(){
+    if(bioGet() && bioSupported()){ showLock(); setTimeout(useBio,250); return; }
+    if(store.getItem(REMEMBER)==="1"){ doUnlock(); return; }
+    showLock();
+  }
+
+  lockGo.addEventListener("click",passUnlock);
+  lockInput.addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();passUnlock();}});
   document.getElementById("lockReset").addEventListener("click",function(){
-    if(confirm("Reset this device? This erases any portfolio data saved on THIS device (the passcode itself is not stored here). It cannot be undone.")){
-      try{store.removeItem(KEY);store.removeItem(SET);store.removeItem(PIN);}catch(e){}
+    if(confirm("Reset this device? This turns off Face ID and ‘keep me unlocked’, and erases any portfolio data saved on THIS device. It cannot be undone.")){
+      try{store.removeItem(KEY);store.removeItem(SET);store.removeItem(PIN);store.removeItem(REMEMBER);store.removeItem(BIO);}catch(e){}
       location.reload();
     }
   });
 
   // ─────────────────── Start: show the lock first ───────────────────
-  showLock();
+  startLock();
 })();
 </script>
 </body>
