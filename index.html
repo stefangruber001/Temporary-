@@ -237,7 +237,7 @@
     <div class="lock-logo">E&amp;F</div>
     <h1 class="lock-title" id="lockTitle">Enter passcode</h1>
     <p class="lock-help" id="lockHelp">Enter your passcode to continue.</p>
-    <input class="lock-input" id="lockInput" type="password" inputmode="numeric" autocomplete="off" maxlength="12" aria-label="Passcode">
+    <input class="lock-input" id="lockInput" type="password" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="64" aria-label="Passcode">
     <p class="lock-err" id="lockErr"></p>
     <button class="btn primary lock-go" id="lockGo">Unlock</button>
     <button class="lock-reset" id="lockReset">Reset (erases this device&rsquo;s data)</button>
@@ -537,12 +537,23 @@
   }
 
   // ─────────────────── Passcode lock (light privacy, not strong security) ───────────────────
-  // NOTE: this only keeps casual eyes out on this device. The page itself is public on
-  // GitHub Pages, and the passcode is stored locally (lightly hashed) — it is NOT real security.
+  // The passcode is baked in as a SHA-256 hash so the SAME code works on every device.
+  // IMPORTANT: this page is PUBLIC on GitHub Pages — the lock only hides the on-screen
+  // figures from a casual glance. It is NOT real security and does not encrypt anything;
+  // anyone with the link can read the raw page source.
+  var PRESET_SHA256="f90b8e28333f7c730782d474d5862bf4effec6176c2ec640b1d2a75c2d867c64";
   var unlocked=false;
-  function hashPin(s){var h=5381;for(var i=0;i<s.length;i++){h=((h<<5)+h+s.charCodeAt(i))>>>0;}return "h"+h.toString(36);}
-  function getPin(){try{return store.getItem(PIN);}catch(e){return null;}}
-  function setPinStored(v){try{store.setItem(PIN,v);}catch(e){}}
+
+  function sha256Hex(str){
+    try{
+      var data=new TextEncoder().encode(str);
+      return crypto.subtle.digest("SHA-256",data).then(function(buf){
+        var b=new Uint8Array(buf), h="";
+        for(var i=0;i<b.length;i++){h+=(b[i]<16?"0":"")+b[i].toString(16);}
+        return h;
+      });
+    }catch(e){ return Promise.reject(e); }
+  }
 
   var lockEl=document.getElementById("lock"),
       lockInput=document.getElementById("lockInput"),
@@ -550,15 +561,15 @@
       lockHelp=document.getElementById("lockHelp"),
       lockErr=document.getElementById("lockErr"),
       lockGo=document.getElementById("lockGo");
-  var lockMode, firstEntry=null;
 
-  function setLockUI(title,help,btn){lockTitle.textContent=title;lockHelp.textContent=help;lockGo.textContent=btn;lockErr.textContent="";lockInput.value="";lockInput.focus();}
   function lockError(m){lockErr.textContent=m;lockInput.value="";lockInput.focus();}
 
   function showLock(){
     lockEl.classList.add("show");
-    if(getPin()){ lockMode="enter"; setLockUI("Enter passcode","Enter your passcode to open E&F Portfolio.","Unlock"); }
-    else { lockMode="create"; setLockUI("Create a passcode","Choose a passcode to protect this device. You’ll enter it each time you open the app.","Continue"); }
+    lockTitle.textContent="Enter passcode";
+    lockHelp.textContent="Enter the passcode to open E&F Portfolio.";
+    lockGo.textContent="Unlock";
+    lockErr.textContent=""; lockInput.value="";
     setTimeout(function(){lockInput.focus();},60);
   }
   function doUnlock(){
@@ -568,22 +579,22 @@
     boot();
   }
   function lockSubmit(){
-    var v=lockInput.value.trim();
-    if(v.length<4) return lockError("Use at least 4 digits.");
-    if(lockMode==="enter"){
-      if(hashPin(v)===getPin()) doUnlock(); else lockError("Incorrect passcode.");
-    }else if(lockMode==="create"){
-      firstEntry=v; lockMode="confirm"; setLockUI("Confirm passcode","Enter the same passcode again to confirm.","Set passcode");
-    }else if(lockMode==="confirm"){
-      if(v===firstEntry){ setPinStored(hashPin(v)); firstEntry=null; doUnlock(); }
-      else { firstEntry=null; lockMode="create"; setLockUI("Create a passcode","Choose a passcode to protect this device.","Continue"); lockError("Passcodes didn’t match — try again."); }
-    }
+    var v=lockInput.value;
+    if(!v) return lockError("Enter your passcode.");
+    lockGo.disabled=true;
+    sha256Hex(v).then(function(h){
+      lockGo.disabled=false;
+      if(h===PRESET_SHA256) doUnlock(); else lockError("Incorrect passcode.");
+    }).catch(function(){
+      lockGo.disabled=false;
+      lockError("This device can’t verify the passcode (needs HTTPS).");
+    });
   }
   lockGo.addEventListener("click",lockSubmit);
   lockInput.addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();lockSubmit();}});
   document.getElementById("lockReset").addEventListener("click",function(){
-    if(confirm("Reset this device? This erases the passcode and all portfolio data saved on THIS device. It cannot be undone.")){
-      try{store.removeItem(PIN);store.removeItem(KEY);store.removeItem(SET);}catch(e){}
+    if(confirm("Reset this device? This erases any portfolio data saved on THIS device (the passcode itself is not stored here). It cannot be undone.")){
+      try{store.removeItem(KEY);store.removeItem(SET);store.removeItem(PIN);}catch(e){}
       location.reload();
     }
   });
