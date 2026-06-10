@@ -261,12 +261,15 @@
   // values; live prices refresh them.
   var DEFAULTS=[
     {id:"vwce", name:"Vanguard FTSE All-World", ticker:"VWCE", exchange:"Xetra · IBIS2",
-     shares:25000/158.68, costBasis:25000, currentPrice:159.30, prevClose:159.50, currency:"EUR", yahoo:"VWCE.DE"}
+     shares:25000/158.68, costBasis:25000, currentPrice:159.30, prevClose:159.50, currency:"EUR", yahoo:"VWCE.DE", boughtOn:"2026-06-10"}
   ];
 
   function loadState(){try{var r=store.getItem(KEY);if(r){var p=JSON.parse(r);if(Array.isArray(p)&&p.length)return p;}}catch(e){}return JSON.parse(JSON.stringify(DEFAULTS));}
   function loadSettings(){try{var r=store.getItem(SET);if(r)return JSON.parse(r);}catch(e){}return{calm:true,updated:Date.now()};}
   var state=loadState();
+  // One-time: tag the originally seeded VWCE as bought on 2026-06-10 so day-one "today" is
+  // measured from the buy price. Saved copies from before this field was added won't have it.
+  state.forEach(function(h){ if(h.id==="vwce" && !h.boughtOn) h.boughtOn="2026-06-10"; });
   var settings=loadSettings();
   if(!settings.updated) settings.updated=Date.now();
   function save(){try{store.setItem(KEY,JSON.stringify(state));}catch(e){}}
@@ -283,11 +286,21 @@
   function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
   function baseCcy(){return state.length?ccy(state[0].currency):"EUR";}
 
+  function todayISO(){try{return new Date().toLocaleDateString("en-CA");}catch(e){return "";}}
+  // A position bought today has no "yesterday" — measure the day's move from your own buy
+  // price, not the market's prior close, so a same-day purchase can't show a loss when you're
+  // actually up. From the next day on, it uses the real previous close.
+  function dayRef(h){
+    if(h.boughtOn && h.boughtOn===todayISO() && h.shares>0) return h.costBasis/h.shares;
+    return (typeof h.prevClose==="number")?h.prevClose:null;
+  }
+
   function totals(){
     var cost=0,mv=0,today=0,hasToday=false;
     state.forEach(function(h){
       cost+=h.costBasis; mv+=h.shares*h.currentPrice;
-      if(typeof h.prevClose==="number"){today+=(h.currentPrice-h.prevClose)*h.shares;hasToday=true;}
+      var ref=dayRef(h);
+      if(ref!=null){today+=(h.currentPrice-ref)*h.shares;hasToday=true;}
     });
     return {cost:cost,mv:mv,gain:mv-cost,gainPct:cost?((mv-cost)/cost*100):0,today:today,hasToday:hasToday};
   }
@@ -336,8 +349,9 @@
       var mv=h.shares*h.currentPrice, avg=h.costBasis/h.shares, unreal=mv-h.costBasis;
       var pctP=t.mv>0?mv/t.mv*100:0;
       var todayHTML="";
-      if(calmOff && typeof h.prevClose==="number"){
-        var td=(h.currentPrice-h.prevClose)*h.shares, tpct=h.prevClose?((h.currentPrice-h.prevClose)/h.prevClose*100):0;
+      var ref=dayRef(h);
+      if(calmOff && ref!=null){
+        var td=(h.currentPrice-ref)*h.shares, tpct=ref?((h.currentPrice-ref)/ref*100):0;
         todayHTML='<div class="card-today '+(td>=0?"g":"dip")+'">Today '+s0(td,c)+' ('+(td>=0?"+":"−")+Math.abs(tpct).toFixed(2)+'%)</div>';
       }
       var lookup=h.yahoo?'<a class="lookup" href="https://finance.yahoo.com/quote/'+encodeURIComponent(h.yahoo)+'" target="_blank" rel="noopener">View on Yahoo &#8599;</a>':'';
