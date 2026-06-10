@@ -256,13 +256,12 @@
     catch(e){var m={};return{getItem:function(k){return k in m?m[k]:null;},setItem:function(k,v){m[k]=String(v);},removeItem:function(k){delete m[k];}};}})();
   var KEY="ef_portfolio_v1", SET="ef_settings_v1", PIN="ef_pin_v1", REMEMBER="ef_remember_v1", BIO="ef_bio_v1";
 
-  // Single pre-loaded holding: VWCE, €25,000 invested at today's rate (break-even at open).
-  // P0 is only a placeholder shown before the first live refresh; on the first successful
-  // refresh the seedInvest logic recomputes shares from the real live price so cost == value.
-  var P0=140.00;
+  // Single pre-loaded holding: a €25,000 slice of the VWCE trade, at the real avg buy
+  // price of €158.68 (so shares = 25000/158.68). currentPrice/prevClose are starting
+  // values; live prices refresh them.
   var DEFAULTS=[
     {id:"vwce", name:"Vanguard FTSE All-World", ticker:"VWCE", exchange:"Xetra · IBIS2",
-     shares:25000/P0, costBasis:25000, currentPrice:P0, prevClose:P0, currency:"EUR", yahoo:"VWCE.DE", seedInvest:25000}
+     shares:25000/158.68, costBasis:25000, currentPrice:159.30, prevClose:159.50, currency:"EUR", yahoo:"VWCE.DE"}
   ];
 
   function loadState(){try{var r=store.getItem(KEY);if(r){var p=JSON.parse(r);if(Array.isArray(p)&&p.length)return p;}}catch(e){}return JSON.parse(JSON.stringify(DEFAULTS));}
@@ -427,8 +426,6 @@
             h.currentPrice=q.price;
             if(q.currency) h.currency=q.currency;
             if(typeof q.prevClose==="number") h.prevClose=q.prevClose;
-            // Seed at "today's rate": on first live price, set shares so cost == value (break-even).
-            if(h.seedInvest){ h.shares=h.seedInvest/q.price; h.costBasis=h.seedInvest; delete h.seedInvest; }
             h.liveAt=Date.now();
           }).catch(function(){ failed.push(h); });
         });
@@ -511,8 +508,7 @@
       shares:shares, costBasis:round(avg*shares,2), currentPrice:current, prevClose:prev,
       yahoo:val("yahoo").trim()};
     if(editingId){
-      // Manual edit wins — drop the seed flag so a later refresh won't overwrite the figures.
-      state=state.map(function(x){if(x.id===editingId){var m=Object.assign({},x,rec);delete m.seedInvest;return m;}return x;});
+      state=state.map(function(x){return x.id===editingId?Object.assign({},x,rec):x;});
     }else{
       rec.currency="EUR";
       rec.id=(rec.ticker||name).toLowerCase().replace(/[^a-z0-9]/g,"")+"_"+Math.random().toString(36).slice(2,6);
@@ -522,7 +518,7 @@
     if(rec.yahoo) refreshPrices();
   });
   document.getElementById("resetBtn").addEventListener("click",function(){
-    if(confirm("Restore the original VWCE figure (€25,000 at today’s rate)? This replaces what’s here now.")){
+    if(confirm("Restore the original VWCE figure (€25,000 @ €158.68)? This replaces what’s here now.")){
       state=JSON.parse(JSON.stringify(DEFAULTS)); settings.updated=Date.now(); save(); saveSettings(); renderAll(); refreshPrices();
     }
   });
