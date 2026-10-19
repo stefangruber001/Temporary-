@@ -384,7 +384,7 @@
     function(u){return "https://api.allorigins.win/get?url="+encodeURIComponent(u);}
   ];
   function fetchText(url){
-    var c=new AbortController(); var id=setTimeout(function(){c.abort();},9000);
+    var c=new AbortController(); var id=setTimeout(function(){c.abort();},7000);
     return fetch(url,{signal:c.signal,cache:"no-store"}).then(function(r){
       clearTimeout(id); if(!r.ok) throw new Error("http "+r.status); return r.text();
     }).catch(function(e){clearTimeout(id);throw e;});
@@ -402,14 +402,21 @@
     throw new Error("no price in payload");
   }
   function fetchQuote(symbol){
+    // Fire every host×proxy combination at once and take the FIRST that answers, instead of
+    // trying them one-by-one (where a single slow/dead proxy stalls everything for seconds).
     var attempts=[];
     HOSTS.forEach(function(host){ PROXIES.forEach(function(mk){ attempts.push(mk(yurl(host,symbol))); }); });
-    var i=0;
-    function tryNext(){
-      if(i>=attempts.length) return Promise.reject(new Error("all attempts failed"));
-      return fetchText(attempts[i++]).then(parseYahoo).catch(function(){return tryNext();});
-    }
-    return tryNext();
+    return new Promise(function(resolve,reject){
+      var pending=attempts.length, settled=false;
+      if(!pending) return reject(new Error("no attempts"));
+      attempts.forEach(function(u){
+        fetchText(u).then(parseYahoo).then(function(q){
+          if(!settled){ settled=true; resolve(q); }
+        }).catch(function(){
+          pending--; if(pending===0 && !settled) reject(new Error("all attempts failed"));
+        });
+      });
+    });
   }
 
   function setStatus(kind,a,b){
@@ -432,26 +439,23 @@
     refreshing=true; setStatus("updating");
     var total=withSym.length;
     function pass(list,left){
-      var failed=[];
-      var chain=Promise.resolve();
-      list.forEach(function(h){
-        chain=chain.then(function(){
-          return fetchQuote(String(h.yahoo).trim()).then(function(q){
-            h.currentPrice=q.price;
-            if(q.currency) h.currency=q.currency;
-            if(typeof q.prevClose==="number") h.prevClose=q.prevClose;
-            h.liveAt=Date.now();
-          }).catch(function(){ failed.push(h); });
-        });
-      });
-      return chain.then(function(){
+      return Promise.all(list.map(function(h){
+        return fetchQuote(String(h.yahoo).trim()).then(function(q){
+          h.currentPrice=q.price;
+          if(q.currency) h.currency=q.currency;
+          if(typeof q.prevClose==="number") h.prevClose=q.prevClose;
+          h.liveAt=Date.now();
+          return null;
+        }).catch(function(){ return h; });
+      })).then(function(results){
+        var failed=results.filter(Boolean);
         if(failed.length && left>0){
-          return new Promise(function(res){setTimeout(res,700);}).then(function(){return pass(failed,left-1);});
+          return new Promise(function(res){setTimeout(res,600);}).then(function(){return pass(failed,left-1);});
         }
         return failed;
       });
     }
-    pass(withSym,2).then(function(failed){
+    pass(withSym,1).then(function(failed){
       refreshing=false;
       var live=total-failed.length;
       if(live>0){ settings.updated=Date.now(); save(); saveSettings(); renderAll(); }
