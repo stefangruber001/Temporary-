@@ -254,14 +254,15 @@
   "use strict";
   var store=(function(){try{var k="__t";localStorage.setItem(k,"1");localStorage.removeItem(k);return localStorage;}
     catch(e){var m={};return{getItem:function(k){return k in m?m[k]:null;},setItem:function(k,v){m[k]=String(v);},removeItem:function(k){delete m[k];}};}})();
-  var KEY="ef_portfolio_v3", SET="ef_settings_v1", PIN="ef_pin_v1", REMEMBER="ef_remember_v1", BIO="ef_bio_v1";
+  var KEY="ef_portfolio_v4", SET="ef_settings_v1", PIN="ef_pin_v1", REMEMBER="ef_remember_v1", BIO="ef_bio_v1";
 
-  // Single pre-loaded holding: a €25,000 slice of the VWCE trade, at the real avg buy
-  // price of €158.68 (so shares = 25000/158.68). currentPrice/prevClose are starting
-  // values; live prices refresh them.
+  // Single pre-loaded holding, two buys: €25,000 @ €158.68 (2026-06-10) and
+  // €15,000 @ €170.78 (2026-10-21). currentPrice/prevClose are starting values; live
+  // prices refresh them.
   var DEFAULTS=[
     {id:"vwce", name:"Vanguard FTSE All-World", ticker:"VWCE", exchange:"Xetra · IBIS2",
-     shares:25000/158.68, costBasis:25000, currentPrice:170.40, prevClose:170.44, currency:"EUR", yahoo:"VWCE.DE", boughtOn:"2026-06-10"}
+     shares:25000/158.68+15000/170.78, costBasis:40000, currentPrice:170.72, prevClose:170.37, currency:"EUR", yahoo:"VWCE.DE",
+     boughtOn:"2026-06-10", lastBuy:{date:"2026-10-21", shares:15000/170.78, price:170.78}}
   ];
 
   function loadState(){try{var r=store.getItem(KEY);if(r){var p=JSON.parse(r);if(Array.isArray(p)&&p.length)return p;}}catch(e){}return JSON.parse(JSON.stringify(DEFAULTS));}
@@ -290,17 +291,29 @@
   // A position bought today has no "yesterday" — measure the day's move from your own buy
   // price, not the market's prior close, so a same-day purchase can't show a loss when you're
   // actually up. From the next day on, it uses the real previous close.
-  function dayRef(h){
-    if(h.boughtOn && h.boughtOn===todayISO() && h.shares>0) return h.costBasis/h.shares;
-    return (typeof h.prevClose==="number")?h.prevClose:null;
+  // lastBuy {date, shares, price}: shares added today are measured from their buy price, the
+  // rest of the position from the previous close. Returns {amt, pct} or null.
+  function todayChange(h){
+    var t=todayISO(), sh=h.shares, cur=h.currentPrice, lb=h.lastBuy;
+    if(h.boughtOn && h.boughtOn===t && sh>0) lb={date:t, shares:sh, price:h.costBasis/sh};
+    var hasPrev=(typeof h.prevClose==="number");
+    if(lb && lb.date===t && sh>0){
+      var newSh=Math.min(lb.shares,sh), oldSh=sh-newSh, hasOld=oldSh>1e-9;
+      if(hasOld && !hasPrev) return null;
+      var amt=(cur-lb.price)*newSh+(hasOld?(cur-h.prevClose)*oldSh:0);
+      var base=lb.price*newSh+(hasOld?h.prevClose*oldSh:0);
+      return {amt:amt, pct:base?amt/base*100:0};
+    }
+    if(!hasPrev) return null;
+    return {amt:(cur-h.prevClose)*sh, pct:h.prevClose?(cur-h.prevClose)/h.prevClose*100:0};
   }
 
   function totals(){
     var cost=0,mv=0,today=0,hasToday=false;
     state.forEach(function(h){
       cost+=h.costBasis; mv+=h.shares*h.currentPrice;
-      var ref=dayRef(h);
-      if(ref!=null){today+=(h.currentPrice-ref)*h.shares;hasToday=true;}
+      var tc=todayChange(h);
+      if(tc){today+=tc.amt;hasToday=true;}
     });
     return {cost:cost,mv:mv,gain:mv-cost,gainPct:cost?((mv-cost)/cost*100):0,today:today,hasToday:hasToday};
   }
@@ -349,9 +362,9 @@
       var mv=h.shares*h.currentPrice, avg=h.costBasis/h.shares, unreal=mv-h.costBasis;
       var pctP=t.mv>0?mv/t.mv*100:0;
       var todayHTML="";
-      var ref=dayRef(h);
-      if(calmOff && ref!=null){
-        var td=(h.currentPrice-ref)*h.shares, tpct=ref?((h.currentPrice-ref)/ref*100):0;
+      var tc=todayChange(h);
+      if(calmOff && tc){
+        var td=tc.amt, tpct=tc.pct;
         todayHTML='<div class="card-today '+(td>=0?"g":"dip")+'">Today '+s0(td,c)+' ('+(td>=0?"+":"−")+Math.abs(tpct).toFixed(2)+'%)</div>';
       }
       var lookup=h.yahoo?'<a class="lookup" href="https://finance.yahoo.com/quote/'+encodeURIComponent(h.yahoo)+'" target="_blank" rel="noopener">View on Yahoo &#8599;</a>':'';
@@ -536,7 +549,7 @@
     if(rec.yahoo) refreshPrices();
   });
   document.getElementById("resetBtn").addEventListener("click",function(){
-    if(confirm("Restore the original VWCE figure (€25,000 @ €158.68)? This replaces what’s here now.")){
+    if(confirm("Restore the original VWCE figures (€25,000 @ €158.68 + €15,000 @ €170.78)? This replaces what’s here now.")){
       state=JSON.parse(JSON.stringify(DEFAULTS)); settings.updated=Date.now(); save(); saveSettings(); renderAll(); refreshPrices();
     }
   });
