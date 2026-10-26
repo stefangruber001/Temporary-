@@ -254,15 +254,15 @@
   "use strict";
   var store=(function(){try{var k="__t";localStorage.setItem(k,"1");localStorage.removeItem(k);return localStorage;}
     catch(e){var m={};return{getItem:function(k){return k in m?m[k]:null;},setItem:function(k,v){m[k]=String(v);},removeItem:function(k){delete m[k];}};}})();
-  var KEY="ef_portfolio_v4", SET="ef_settings_v1", PIN="ef_pin_v1", REMEMBER="ef_remember_v1", BIO="ef_bio_v1";
+  var KEY="ef_portfolio_v5", SET="ef_settings_v1", PIN="ef_pin_v1", REMEMBER="ef_remember_v1", BIO="ef_bio_v1";
 
-  // Single pre-loaded holding, two buys: €25,000 @ €158.68 (2026-06-10) and
-  // €15,000 @ €170.78 (2026-10-21). currentPrice/prevClose are starting values; live
-  // prices refresh them.
+  // Single pre-loaded holding, three buys: €25,000 @ €158.68 (2026-06-10),
+  // €15,000 @ €170.78 (2026-10-21) and €10,000 @ €169.08 (2026-10-26).
+  // currentPrice/prevClose are starting values; live prices refresh them.
   var DEFAULTS=[
     {id:"vwce", name:"Vanguard FTSE All-World", ticker:"VWCE", exchange:"Xetra · IBIS2",
-     shares:25000/158.68+15000/170.78, costBasis:40000, currentPrice:170.72, prevClose:170.37, currency:"EUR", yahoo:"VWCE.DE",
-     boughtOn:"2026-06-10", lastBuy:{date:"2026-10-21", shares:15000/170.78, price:170.78}}
+     shares:25000/158.68+15000/170.78+10000/169.08, costBasis:50000, currentPrice:168.98, prevClose:169.30, currency:"EUR", yahoo:"VWCE.DE",
+     boughtOn:"2026-06-10", lastBuy:{date:"2026-10-26", shares:10000/169.08, price:169.08}}
   ];
 
   function loadState(){try{var r=store.getItem(KEY);if(r){var p=JSON.parse(r);if(Array.isArray(p)&&p.length)return p;}}catch(e){}return JSON.parse(JSON.stringify(DEFAULTS));}
@@ -549,7 +549,7 @@
     if(rec.yahoo) refreshPrices();
   });
   document.getElementById("resetBtn").addEventListener("click",function(){
-    if(confirm("Restore the original VWCE figures (€25,000 @ €158.68 + €15,000 @ €170.78)? This replaces what’s here now.")){
+    if(confirm("Restore the original VWCE figures (€25,000 @ €158.68 + €15,000 @ €170.78 + €10,000 @ €169.08)? This replaces what’s here now.")){
       state=JSON.parse(JSON.stringify(DEFAULTS)); settings.updated=Date.now(); save(); saveSettings(); renderAll(); refreshPrices();
     }
   });
